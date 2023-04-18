@@ -2,4 +2,4 @@
 transformers==4.28.0
 peft==0.2.0
 accelerate==0.18.0
-deepspeed==0.9.0
+deepspeed==0.8.3  # a multi-gpus bug in 0.9.0 https://github.com/microsoft/DeepSpeed/issues/3228
