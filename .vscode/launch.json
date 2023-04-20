@@ -8,15 +8,16 @@
             "name": "Python: Current File",
             "type": "python",
             "request": "launch",
-            "program": "/home/lichunyu/miniconda3/envs/glm/bin/accelerate",
+            // "program": "/home/lichunyu/miniconda3/envs/glm/bin/accelerate",
+            "program": "${file}",
             "console": "internalConsole",
             "justMyCode": false,
-            "args": [
-                "launch",
-                "--config_file",
-                "accelerate_config.yaml",
-                "${file}",
-            ]
+            // "args": [
+            //     "launch",
+            //     "--config_file",
+            //     "accelerate_config.yaml",
+            //     "${file}",
+            // ]
         }
     ]
 }
