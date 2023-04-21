@@ -3,16 +3,19 @@
 @create_time: 2023/04/17 10:18:56
 @author: lichunyu
 '''
-import logging
+from dataclasses import dataclass, field
 
 import torch
+import torch.nn.functional as F
 from torch.utils.data import Dataset, DataLoader
+from torch.nn.utils.rnn import pad_sequence
 from torch.utils.data.dataset import T_co
 from torch.optim import AdamW
 from transformers import (
     AutoModel,
     AutoTokenizer,
-    get_linear_schedule_with_warmup
+    get_linear_schedule_with_warmup,
+    PreTrainedTokenizerBase
 )
 from peft import get_peft_model, LoraConfig, TaskType
 from accelerate import Accelerator, DeepSpeedPlugin
@@ -112,6 +115,42 @@ class CausalDataset(Dataset):
         return position_ids_2d
 
 
+@dataclass
+class CausalCollator:
+
+    tokenizer: PreTrainedTokenizerBase = field(default=None, metadata={"help": "tokenizer of the LLM"})
+
+    def __call__(self, batch):
+        max_length = max([i["input_ids"].size(-1) for i in batch])
+        input_ids = pad_sequence(
+            [i["input_ids"] for i in batch],
+            batch_first=True,
+            padding_value=self.tokenizer.pad_token_id if self.tokenizer is not None else 3
+        )
+        attention_mask = torch.stack(
+            [F.pad(
+                    i["attention_mask"],
+                    (
+                        0,
+                        max_length-i["attention_mask"].size(-1),
+                        0,
+                        max_length-i["attention_mask"].size(-1)
+                    ),
+                    value=False
+                ) for i in batch]
+            )
+        position_ids = torch.stack([F.pad(i["position_ids"], (0, max_length-i["position_ids"].size(-1)),mode="replicate") for i in batch])
+        labels = pad_sequence([i["labels"] for i in batch], batch_first=True, padding_value=-100)
+
+        return {
+            "input_ids": input_ids,
+            "attention_mask": attention_mask,
+            "position_ids": position_ids,
+            "labels": labels
+        }
+
+
+
 def main():
 
     # TODO collect with a dataclass
@@ -135,7 +174,7 @@ def main():
         max_q_length=max_q_length,
         max_a_length=max_a_length
     )
-    train_dataloader = DataLoader(train_dataset, batch_size=batch_size)
+    train_dataloader = DataLoader(train_dataset, batch_size=batch_size, collate_fn=CausalCollator())
 
     accelerator.wait_for_everyone()
 
