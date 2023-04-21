@@ -10,7 +10,6 @@ import torch.nn.functional as F
 from torch.utils.data import Dataset, DataLoader
 from torch.nn.utils.rnn import pad_sequence
 from torch.utils.data.dataset import T_co
-from torch.optim import AdamW
 from transformers import (
     AutoModel,
     AutoTokenizer,
@@ -21,6 +20,8 @@ from peft import get_peft_model, LoraConfig, TaskType
 from accelerate import Accelerator, DeepSpeedPlugin
 from accelerate.utils.deepspeed import DummyOptim, DummyScheduler
 from accelerate.state import AcceleratorState
+from accelerate.utils import LoggerType
+from tqdm.auto import tqdm
 
 from utils import get_data
 from constants import Prompt, TokenNum
@@ -105,6 +106,7 @@ class CausalDataset(Dataset):
         attention_mask = torch.ones((input_ids.size(-1), input_ids.size(-1)))
         attention_mask = attention_mask.tril()
         attention_mask[..., :q_length] = 1
+        attention_mask = attention_mask.unsqueeze(0)
         attention_mask = attention_mask.bool()
         return attention_mask
 
@@ -126,7 +128,7 @@ class CausalCollator:
             [i["input_ids"] for i in batch],
             batch_first=True,
             padding_value=self.tokenizer.pad_token_id if self.tokenizer is not None else 3
-        )
+        ).int()
         attention_mask = torch.stack(
             [F.pad(
                     i["attention_mask"],
@@ -139,7 +141,7 @@ class CausalCollator:
                     value=False
                 ) for i in batch]
             )
-        position_ids = torch.stack([F.pad(i["position_ids"], (0, max_length-i["position_ids"].size(-1)),mode="replicate") for i in batch])
+        position_ids = torch.stack([F.pad(i["position_ids"], (0, max_length-i["position_ids"].size(-1)),mode="replicate") for i in batch]).int()
         labels = pad_sequence([i["labels"] for i in batch], batch_first=True, padding_value=-100)
 
         return {
@@ -162,11 +164,26 @@ def main():
     batch_size = 2
     learning_rate = 1e-4
     accumulate_step=1
-    epoch=5
+    num_epochs=5
     num_warmup_steps=0
 
     accelerator = Accelerator()
+    # accelerator = Accelerator(log_with=[LoggerType.TENSORBOARD])
     accelerator.print(f"{AcceleratorState()}")
+    hps = {}
+    # accelerator.init_trackers("chatglm_lora", config=hps)
+
+    with accelerator.main_process_first():
+        peft_config = LoraConfig(
+            task_type=TaskType.CAUSAL_LM, inference_mode=False, r=8, lora_alpha=32, lora_dropout=0.1,
+            target_modules=["query_key_value"], fan_in_fan_out=False
+        )
+
+        model = AutoModel.from_pretrained(model_name_or_path, trust_remote_code=True, revision="main").half()
+        model = get_peft_model(model, peft_config)
+
+    if accelerator.is_local_main_process:
+        model.print_trainable_parameters()
 
     train_dataset = CausalDataset(
         file_path=file_path,
@@ -176,19 +193,6 @@ def main():
     )
     train_dataloader = DataLoader(train_dataset, batch_size=batch_size, collate_fn=CausalCollator())
 
-    accelerator.wait_for_everyone()
-
-    peft_config = LoraConfig(
-        task_type=TaskType.CAUSAL_LM, inference_mode=False, r=12, lora_alpha=32, lora_dropout=0.1,
-        target_modules=["query_key_value"], fan_in_fan_out=False
-    )
-
-    model = AutoModel.from_pretrained(model_name_or_path, trust_remote_code=True, revision="main")
-    model = get_peft_model(model, peft_config)
-
-    if accelerator.is_local_main_process:
-        model.print_trainable_parameters()
-
     optimizer_cls = (
         torch.optim.AdamW
         if accelerator.state.deepspeed_plugin is None
@@ -197,7 +201,7 @@ def main():
     )
     optimizer = optimizer_cls(model.parameters(), lr=learning_rate)
 
-    max_train_steps = len(train_dataloader)//accumulate_step*epoch
+    max_train_steps = len(train_dataloader) // accumulate_step * num_epochs
     if (
         accelerator.state.deepspeed_plugin is None
         or "scheduler" not in accelerator.state.deepspeed_plugin.deepspeed_config
@@ -212,6 +216,17 @@ def main():
             optimizer, total_num_steps=max_train_steps, warmup_num_steps=num_warmup_steps
         )
     model, optimizer, train_dataloader, lr_scheduler = accelerator.prepare(model, optimizer, train_dataloader, lr_scheduler)
+
+    for epoch in range(num_epochs):
+        for step, batch in enumerate(tqdm(train_dataloader, disable=(not accelerator.is_local_main_process))):
+            optimizer.zero_grad()
+            outputs = model(**batch)
+            loss = outputs["loss"]
+            accelerator.backward(loss)
+            optimizer.step()
+            # accelerator.log({"training_loss": loss}, step=step)
+
+    # accelerator.end_training()
 
 
 if __name__ == "__main__":
