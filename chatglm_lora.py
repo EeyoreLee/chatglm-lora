@@ -63,18 +63,20 @@ class CausalDataset(Dataset):
     def get_input_ids_and_labels(self, q, a):
         inputs = self.tokenizer(
                 q,
-                add_special_tokens = False,
+                add_special_tokens = True,
                 truncation='longest_first',
-                max_length = self.max_q_length-TokenNum.answer,
+                max_length = self.max_q_length,
                 return_tensors = 'pt',
                 return_attention_mask=False
         )["input_ids"]
-        answer_prompt = self.tokenizer(
-            Prompt.answer,
-            add_special_tokens=True,
-            return_tensors = 'pt',
-            return_attention_mask=False
-        )["input_ids"]
+
+        # TODO Compatible with both single-turn and multi-turn conversations
+        # answer_prompt = self.tokenizer(
+        #     Prompt.answer,
+        #     add_special_tokens=True,
+        #     return_tensors = 'pt',
+        #     return_attention_mask=False
+        # )["input_ids"]
 
         # insight of picture 2 in GLM paper but is not suitable for open-source code !
         # input_answer = self.tokenizer(
@@ -97,17 +99,18 @@ class CausalDataset(Dataset):
 
         input_answer = label_answer
 
-        question = torch.concat([inputs, answer_prompt], dim=-1)
+        # question = torch.concat([inputs, answer_prompt], dim=-1)
+        question = inputs
         input_ids = torch.concat([question, input_answer], dim=-1).squeeze(0)
         labels = torch.concat([torch.full((1, question.size(-1)), -100), label_answer], dim=-1).squeeze(0)
         return input_ids, labels, question
 
     def get_attention_mask(self, input_ids, q_length):
         attention_mask = torch.ones((input_ids.size(-1), input_ids.size(-1)))
-        attention_mask = attention_mask.tril()
+        attention_mask.tril_()
         attention_mask[..., :q_length] = 1
-        attention_mask = attention_mask.unsqueeze(0)
-        attention_mask = attention_mask.bool()
+        attention_mask.unsqueeze_(0)
+        attention_mask = (attention_mask < 0.5).bool()  # cause GLM use masked_fill_(mask, -1000.)
         return attention_mask
 
     def get_position_ids(self, input_ids, q_length):
@@ -164,8 +167,9 @@ def main():
     batch_size = 2
     learning_rate = 1e-4
     accumulate_step=1
-    num_epochs=5
+    num_epochs=100
     num_warmup_steps=0
+    save_filename="chatglm_lora.pth"
 
     accelerator = Accelerator()
     # accelerator = Accelerator(log_with=[LoggerType.TENSORBOARD])
@@ -175,8 +179,8 @@ def main():
 
     with accelerator.main_process_first():
         peft_config = LoraConfig(
-            task_type=TaskType.CAUSAL_LM, inference_mode=False, r=8, lora_alpha=32, lora_dropout=0.1,
-            target_modules=["query_key_value"], fan_in_fan_out=False
+            task_type=TaskType.CAUSAL_LM, inference_mode=False, r=32, lora_alpha=32, lora_dropout=0.1,
+            target_modules=["query_key_value"], fan_in_fan_out=False, bias="all"
         )
 
         model = AutoModel.from_pretrained(model_name_or_path, trust_remote_code=True, revision="main").half()
@@ -217,16 +221,23 @@ def main():
         )
     model, optimizer, train_dataloader, lr_scheduler = accelerator.prepare(model, optimizer, train_dataloader, lr_scheduler)
 
+    # return  # TODO break for a massive bug with [accelerate, peft]
     for epoch in range(num_epochs):
-        for step, batch in enumerate(tqdm(train_dataloader, disable=(not accelerator.is_local_main_process))):
+        # for step, batch in enumerate(tqdm(train_dataloader, disable=(not accelerator.is_local_main_process))):
+        for step, batch in enumerate(train_dataloader):
             optimizer.zero_grad()
             outputs = model(**batch)
             loss = outputs["loss"]
             accelerator.backward(loss)
             optimizer.step()
             # accelerator.log({"training_loss": loss}, step=step)
+            accelerator.print(f"loss: {loss.item()}")
 
     # accelerator.end_training()
+    # return  # TODO break for a massive bug with [accelerate, peft]
+    accelerator.wait_for_everyone()
+    unwrapped_model = accelerator.unwrap_model(model)
+    accelerator.save(unwrapped_model.state_dict(), save_filename)
 
 
 if __name__ == "__main__":

@@ -12,8 +12,10 @@ def gen_pair_data(data: list, max_text_length: int):
     prompt = ""
     for i, d in enumerate(data):
         q, a = d["q"], d["a"]
-        # remove suffix `\n答：` to fixed seq length and will add the suffix later
-        prompt = history + "[Round {}]\n问：{}".format(i, q)
+        if history:
+            prompt = history + "[Round {}]\n问：{}\n答：".format(i, q)
+        else:
+            prompt = q
         if len(prompt) > max_text_length:
             break
         result.append({
