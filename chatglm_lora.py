@@ -161,9 +161,9 @@ class CausalCollator:
 def main():
 
     # TODO collect with a dataclass
-    model_name_or_path = "/home/lichunyu/pretrain_models/chatglm-6b"
-    tokenizer_name_or_path = "/home/lichunyu/pretrain_models/chatglm-6b"
-    file_path = "data.jsonl"
+    model_name_or_path = "/home/lichunyu/pretrain_models/chatglm-6b"  # change to `chatglm-6b` without local weights
+    tokenizer_name_or_path = "/home/lichunyu/pretrain_models/chatglm-6b" # change to `chatglm-6b` without local weights
+    file_path = "data_example.jsonl"
     max_q_length = 1500
     max_a_length = 500
     batch_size = 2
@@ -171,7 +171,8 @@ def main():
     accumulate_step=1
     num_epochs=100
     num_warmup_steps=0
-    save_filename="output_dir/chatglm_lora"
+    # save_filename="output_dir/chatglm_lora"
+    save_filename="chatglm_lora.pth"
 
     accelerator = Accelerator()
     # accelerator = Accelerator(log_with=[LoggerType.TENSORBOARD])
@@ -223,7 +224,6 @@ def main():
         )
     model, optimizer, train_dataloader, lr_scheduler = accelerator.prepare(model, optimizer, train_dataloader, lr_scheduler)
 
-    # return  # TODO break for a massive bug with [accelerate, peft]
     for epoch in range(num_epochs):
         epoch_loss = 0
         for step, batch in enumerate(tqdm(train_dataloader, disable=(not accelerator.is_local_main_process))):
@@ -237,14 +237,13 @@ def main():
             epoch_loss += loss.item()
         accelerator.print(f"loss: {epoch_loss/(step+1)}")
 
-        if epoch > 20 and epoch%5 == 0:
-            accelerator.wait_for_everyone()
-            unwrapped_model = accelerator.unwrap_model(model)
-            accelerator.save(unwrapped_model.state_dict(), save_filename+f"epoch_{epoch}.pth")
-    # accelerator.print(f"loss: {loss.item()}")
+        # HACK
+        # if epoch > 20 and epoch%5 == 0:
+        #     accelerator.wait_for_everyone()
+        #     unwrapped_model = accelerator.unwrap_model(model)
+        #     accelerator.save(unwrapped_model.state_dict(), save_filename+f"epoch_{epoch}.pth")
 
     # accelerator.end_training()
-    # return  # TODO break for a massive bug with [accelerate, peft]
     accelerator.wait_for_everyone()
     unwrapped_model = accelerator.unwrap_model(model)
     accelerator.save(unwrapped_model.state_dict(), save_filename)
