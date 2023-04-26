@@ -45,8 +45,9 @@ class CausalDataset(Dataset):
     def __getitem__(self, index) -> T_co:
         q = self.data[index]["q"]
         a = self.data[index]["a"]
+        is_multi_turn = self.data[index].get("is_multi_turn", 0)
 
-        input_ids, labels, question = self.get_input_ids_and_labels(q, a)
+        input_ids, labels, question = self.get_input_ids_and_labels(q, a, is_multi_turn)
         attention_mask = self.get_attention_mask(input_ids, question.size(-1))
         position_ids = self.get_position_ids(input_ids, question.size(-1))
 
@@ -60,7 +61,7 @@ class CausalDataset(Dataset):
     def __len__(self):
         return len(self.data)
 
-    def get_input_ids_and_labels(self, q, a):
+    def get_input_ids_and_labels(self, q, a, is_multi_turn=0):
         inputs = self.tokenizer(
                 q,
                 add_special_tokens = True,
@@ -70,13 +71,16 @@ class CausalDataset(Dataset):
                 return_attention_mask=False
         )["input_ids"]
 
-        # TODO Compatible with both single-turn and multi-turn conversations
-        # answer_prompt = self.tokenizer(
-        #     Prompt.answer,
-        #     add_special_tokens=True,
-        #     return_tensors = 'pt',
-        #     return_attention_mask=False
-        # )["input_ids"]
+        if is_multi_turn != 0:
+            answer_prompt = self.tokenizer(
+                Prompt.answer,
+                add_special_tokens=True,
+                return_tensors = 'pt',
+                return_attention_mask=False
+            )["input_ids"]
+            question = torch.concat([inputs, answer_prompt], dim=-1)
+        else:
+            question = inputs
 
         # insight of picture 2 in GLM paper but is not suitable for open-source code !
         # input_answer = self.tokenizer(
@@ -99,8 +103,6 @@ class CausalDataset(Dataset):
 
         input_answer = label_answer
 
-        # question = torch.concat([inputs, answer_prompt], dim=-1)
-        question = inputs
         input_ids = torch.concat([question, input_answer], dim=-1).squeeze(0)
         labels = torch.concat([torch.full((1, question.size(-1)), -100), label_answer], dim=-1).squeeze(0)
         return input_ids, labels, question
@@ -161,7 +163,7 @@ def main():
     # TODO collect with a dataclass
     model_name_or_path = "/home/lichunyu/pretrain_models/chatglm-6b"
     tokenizer_name_or_path = "/home/lichunyu/pretrain_models/chatglm-6b"
-    file_path = "data_example.jsonl"
+    file_path = "data.jsonl"
     max_q_length = 1500
     max_a_length = 500
     batch_size = 2
@@ -169,7 +171,7 @@ def main():
     accumulate_step=1
     num_epochs=100
     num_warmup_steps=0
-    save_filename="chatglm_lora.pth"
+    save_filename="output_dir/chatglm_lora"
 
     accelerator = Accelerator()
     # accelerator = Accelerator(log_with=[LoggerType.TENSORBOARD])
@@ -223,15 +225,23 @@ def main():
 
     # return  # TODO break for a massive bug with [accelerate, peft]
     for epoch in range(num_epochs):
-        # for step, batch in enumerate(tqdm(train_dataloader, disable=(not accelerator.is_local_main_process))):
-        for step, batch in enumerate(train_dataloader):
+        epoch_loss = 0
+        for step, batch in enumerate(tqdm(train_dataloader, disable=(not accelerator.is_local_main_process))):
+        # for step, batch in enumerate(train_dataloader):
             optimizer.zero_grad()
             outputs = model(**batch)
             loss = outputs["loss"]
             accelerator.backward(loss)
             optimizer.step()
             # accelerator.log({"training_loss": loss}, step=step)
-            accelerator.print(f"loss: {loss.item()}")
+            epoch_loss += loss.item()
+        accelerator.print(f"loss: {epoch_loss/(step+1)}")
+
+        if epoch > 20 and epoch%5 == 0:
+            accelerator.wait_for_everyone()
+            unwrapped_model = accelerator.unwrap_model(model)
+            accelerator.save(unwrapped_model.state_dict(), save_filename+f"epoch_{epoch}.pth")
+    # accelerator.print(f"loss: {loss.item()}")
 
     # accelerator.end_training()
     # return  # TODO break for a massive bug with [accelerate, peft]

@@ -130,3 +130,5 @@ dmypy.json
 
 # Customer
 *.pth
+output_dir/
+data.jsonl

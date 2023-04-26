@@ -13,14 +13,15 @@ def gen_pair_data(data: list, max_text_length: int):
     for i, d in enumerate(data):
         q, a = d["q"], d["a"]
         if history:
-            prompt = history + "[Round {}]\n问：{}\n答：".format(i, q)
+            prompt = history + "[Round {}]\n问：{}".format(i, q)
         else:
             prompt = q
         if len(prompt) > max_text_length:
             break
         result.append({
             "q": prompt,
-            "a": a
+            "a": a,
+            "is_multi_turn": 1 if history else 0
         })
         history += "[Round {}]\n问：{}\n答：{}\n".format(i, q, a)
     return result

@@ -11,17 +11,17 @@ from chatglm_lora import CausalDataset, CausalCollator
 
 
 tokenizer = AutoTokenizer.from_pretrained("/home/lichunyu/pretrain_models/chatglm-6b", trust_remote_code=True, revision="main")
-model = AutoModel.from_pretrained("/home/lichunyu/pretrain_models/chatglm-6b", trust_remote_code=True, revision="main").half().cuda()
+# model = AutoModel.from_pretrained("/home/lichunyu/pretrain_models/chatglm-6b", trust_remote_code=True, revision="main").half().cuda()
 
 dataset = CausalDataset(
-    file_path="data_example.jsonl",
+    file_path="data.jsonl",
     tokenizer_name_or_path="/home/lichunyu/pretrain_models/chatglm-6b"
 )
 dataloader = DataLoader(dataset=dataset, batch_size=4, collate_fn=CausalCollator())
-model.eval()
+# model.eval()
 for batch in dataloader:
     batch = {k: v.cuda() for k, v in batch.items()}
-    output = model(**batch)
+    # output = model(**batch)
     ...
 # x = dataloader[0]
 
